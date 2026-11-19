@@ -24,6 +24,8 @@ consult-first / write-back rules.
   `BinaryParser` ids, the format-badge picker in both editors, settings pages, live reload.
 - [[entities/binary-opened-format-analytics]] — how `binary_opened.format` is derived, the
   `generic_ext` / `detected_format` / `generic_header` breakdown, and supported formats misreported as `generic`.
+- [[entities/data-inspector]] — hex-view Data Inspector: shared `dataInspectorGroups` model (selection,
+  LEB128, hex, ints/floats LE/BE, text) rendered by both IntelliJ and web-ui panels; issue #31.
 - [[entities/partial-views]] — files of any size: `LargeBytes` + chunked mmap, 64-bit ranges/selections
   (`NativeByteRange` Int views throw past 2 GiB), which parsers read the whole file, VS Code paged hex
   view and scaled scroll model, `ParseCoverage` (when a large file warns), VS Code fetch rounds

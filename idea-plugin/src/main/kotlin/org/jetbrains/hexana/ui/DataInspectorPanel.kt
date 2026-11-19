@@ -14,20 +14,22 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.hexana.HexViewStateHolder
 import org.jetbrains.hexana.io.LargeBytes
 import org.jetbrains.hexana.io.readBytes
+import org.jetbrains.hexana.shared.DATA_INSPECTOR_WINDOW
+import org.jetbrains.hexana.shared.dataInspectorGroups
 import org.jetbrains.jewel.ui.component.Text
 import java.awt.Cursor
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
- * A side panel that displays the bytes at the current cursor position
- * interpreted as various numeric types in both little-endian and big-endian
- * byte orders — the standard "Data Inspector" found in most hex editors.
+ * A side panel that decodes the selected bytes — or, without a multi-byte selection, the bytes at
+ * the cursor — as integers and floats (little- or big-endian), unsigned and signed LEB128, hex,
+ * binary, octal, ASCII and UTF-8: the standard "Data Inspector" found in most hex editors. The
+ * decodings come from the shared [dataInspectorGroups], so the VS Code / web panel shows the same.
  */
 @Composable
 internal fun DataInspectorPanel(
@@ -36,9 +38,22 @@ internal fun DataInspectorPanel(
 ) {
     val bytesPerRow by state.bytesPerRow
     val cursor = state.cursorPosition
-    val hasCursor = cursor.line >= 0 && cursor.lineOffset >= 0
-    val offset = if (hasCursor) cursor.getByteOffset(bytesPerRow) else -1L
+    val selection = state.selection
     val totalBytes = bytes.size
+
+    val hasSelection = selection.start.line >= 0 && selection.end.line >= 0 &&
+        (selection.start.line != selection.end.line || selection.start.lineOffset != selection.end.lineOffset)
+    val selectionStart = if (hasSelection) selection.start.getByteOffset(bytesPerRow) else -1L
+    val selectionLength = if (hasSelection) {
+        (selection.end.getByteOffset(bytesPerRow).coerceAtMost(totalBytes - 1) - selectionStart + 1).takeIf { it > 0 }
+    } else {
+        null
+    }
+    val offset = when {
+        selectionLength != null -> selectionStart
+        cursor.line >= 0 && cursor.lineOffset >= 0 -> cursor.getByteOffset(bytesPerRow)
+        else -> -1L
+    }
 
     var littleEndian by remember { mutableStateOf(true) }
 
@@ -73,33 +88,24 @@ internal fun DataInspectorPanel(
         EndianSwitch(littleEndian, headerStyle) { littleEndian = it }
         Spacer(Modifier.height(8.dp))
 
-        if (!hasCursor || offset < 0 || offset >= totalBytes) {
+        if (offset < 0 || offset >= totalBytes) {
             Text("No byte selected", style = labelStyle)
             return@Column
         }
 
-        // Read up to 8 bytes starting at cursor for the widest type (Double/Long).
-        val raw = bytes.readBytes(offset, (totalBytes - offset).coerceAtMost(8).toInt())
-
-        val order = if (littleEndian) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN
-        inspectorRows(raw, order, labelStyle, valueStyle)
-
-        Spacer(Modifier.height(8.dp))
-
-        // Binary / Octal representation of the current byte
-        val b = raw[0].toInt() and 0xFF
-        InspectorRow("Binary", b.toString(2).padStart(8, '0'), labelStyle, valueStyle)
-        InspectorRow("Octal", b.toString(8), labelStyle, valueStyle)
-
-        // ASCII
-        val asciiChar = if (b in 0x20..0x7E) b.toChar().toString() else "·"
-        InspectorRow("ASCII", asciiChar, labelStyle, valueStyle)
-
-        // UTF-8 string starting at cursor until a non-UTF-8 sequence
-        val utf8Raw = bytes.readBytes(offset, (totalBytes - offset).coerceAtMost(64).toInt())
-        val utf8Str = decodeUtf8Prefix(utf8Raw)
-        if (utf8Str.isNotEmpty()) {
-            InspectorRow("UTF-8", utf8Str, labelStyle, valueStyle)
+        val window = (selectionLength ?: (totalBytes - offset))
+            .coerceAtMost(DATA_INSPECTOR_WINDOW.toLong()).toInt()
+        val raw = bytes.readBytes(offset, window)
+        val groups = dataInspectorGroups(
+            bytes = raw,
+            offset = offset + state.displayBaseOffset,
+            littleEndian = littleEndian,
+            selectionLength = selectionLength,
+        )
+        groups.forEachIndexed { index, group ->
+            if (index > 0) Spacer(Modifier.height(6.dp))
+            Text(group.title, style = labelStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold))
+            for (row in group.rows) InspectorRow(row.label, row.value, labelStyle, valueStyle)
         }
     }
     }
@@ -130,90 +136,12 @@ private fun EndianSwitch(littleEndian: Boolean, style: TextStyle, onToggle: (Boo
 }
 
 @Composable
-private fun inspectorRows(raw: ByteArray, order: ByteOrder, labelStyle: TextStyle, valueStyle: TextStyle) {
-    val buf = ByteBuffer.wrap(raw.copyOf(8)).order(order)
-
-    // Int8 / UInt8 — always available (at least 1 byte)
-    InspectorRow("Int8", raw[0].toString(), labelStyle, valueStyle)
-    InspectorRow("UInt8", (raw[0].toInt() and 0xFF).toString(), labelStyle, valueStyle)
-
-    if (raw.size >= 2) {
-        buf.position(0)
-        val s = buf.short
-        InspectorRow("Int16", s.toString(), labelStyle, valueStyle)
-        InspectorRow("UInt16", (s.toInt() and 0xFFFF).toString(), labelStyle, valueStyle)
-    }
-
-    if (raw.size >= 4) {
-        buf.position(0)
-        val i = buf.int
-        InspectorRow("Int32", i.toString(), labelStyle, valueStyle)
-        InspectorRow("UInt32", (i.toLong() and 0xFFFFFFFFL).toString(), labelStyle, valueStyle)
-
-        buf.position(0)
-        InspectorRow("Float32", buf.float.toString(), labelStyle, valueStyle)
-    }
-
-    if (raw.size >= 8) {
-        buf.position(0)
-        val l = buf.long
-        InspectorRow("Int64", l.toString(), labelStyle, valueStyle)
-        InspectorRow("UInt64", java.lang.Long.toUnsignedString(l), labelStyle, valueStyle)
-
-        buf.position(0)
-        InspectorRow("Float64", buf.double.toString(), labelStyle, valueStyle)
-    }
-}
-
-@Composable
 private fun InspectorRow(label: String, value: String, labelStyle: TextStyle, valueStyle: TextStyle) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(label, style = labelStyle, modifier = Modifier.width(60.dp))
-        Text(value, style = valueStyle)
+        Text(label, style = labelStyle, modifier = Modifier.width(64.dp))
+        Text(value, style = valueStyle, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
     }
-}
-
-/**
- * Decodes a valid UTF-8 prefix from [data], stopping at the first byte that
- * cannot start or continue a valid UTF-8 character sequence.
- */
-private fun decodeUtf8Prefix(data: ByteArray): String {
-    val sb = StringBuilder()
-    var i = 0
-    while (i < data.size) {
-        val b0 = data[i].toInt() and 0xFF
-        val seqLen: Int
-        val codePoint: Int
-        when {
-            b0 <= 0x7F -> { seqLen = 1; codePoint = b0 }
-            b0 in 0xC2..0xDF -> { seqLen = 2; codePoint = b0 and 0x1F }
-            b0 in 0xE0..0xEF -> { seqLen = 3; codePoint = b0 and 0x0F }
-            b0 in 0xF0..0xF4 -> { seqLen = 4; codePoint = b0 and 0x07 }
-            else -> break
-        }
-        if (i + seqLen > data.size) break
-        var cp = codePoint
-        var valid = true
-        for (j in 1 until seqLen) {
-            val cont = data[i + j].toInt() and 0xFF
-            if (cont and 0xC0 != 0x80) { valid = false; break }
-            cp = (cp shl 6) or (cont and 0x3F)
-        }
-        if (!valid) break
-        // Reject overlong encodings and surrogates
-        if (seqLen == 2 && cp < 0x80) break
-        if (seqLen == 3 && cp < 0x800) break
-        if (seqLen == 4 && cp < 0x10000) break
-        if (cp in 0xD800..0xDFFF) break
-        if (cp > 0x10FFFF) break
-        // Skip control characters (except common whitespace)
-        if (cp < 0x20 && cp != 0x09 && cp != 0x0A && cp != 0x0D) break
-        sb.appendCodePoint(cp)
-        i += seqLen
-        if (sb.length >= 32) break
-    }
-    return sb.toString()
 }

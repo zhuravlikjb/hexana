@@ -203,3 +203,4 @@ Append one line per write-back: date, page, what changed.
 - 2026-11-12 — `entities/third-party-notices` — HEXANA-33 Part B: shared notices generator, per-artifact verification, `license/third_party` layout.
 - 2026-11-12 — `sources/third-party-fixture-provenance` — HEXANA-33 part B area D: fixture provenance/licence notices, Nordic-licensed ELF removed, legacy Exceptions.md replaced by a link.
 - 2026-11-13 — `entities/leak-guard` — new: clean-machine build findings, leak guard design (private TeamCity/Patronus check plus generic GitHub Action).
+- 2026-11-19 — `entities/data-inspector` — issue #31 gaps: selection-aware inspector, ULEB/SLEB128, hex row; decoding moved to plugins-shared.
